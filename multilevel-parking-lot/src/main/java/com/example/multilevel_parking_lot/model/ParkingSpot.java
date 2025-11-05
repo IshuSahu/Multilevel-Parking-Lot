@@ -13,7 +13,7 @@ public class ParkingSpot {
     private int level;
     private int number;
 
-    // track occupancy in thread-safe manner
+    // track occupancy in thread-safe manner, ensure non-null when using builder
     @Builder.Default
     private AtomicBoolean occupied = new AtomicBoolean(false);
 
