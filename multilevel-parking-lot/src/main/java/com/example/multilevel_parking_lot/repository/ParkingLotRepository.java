@@ -1,10 +1,7 @@
 package com.example.multilevel_parking_lot.repository;
 
 import com.example.multilevel_parking_lot.model.ParkingLot;
+import org.springframework.data.jpa.repository.JpaRepository;
 
-import java.util.Optional;
-
-public interface ParkingLotRepository {
-    Optional<ParkingLot> findById(String id);
-    ParkingLot save(ParkingLot lot);
+public interface ParkingLotRepository extends JpaRepository<ParkingLot, String> {
 }

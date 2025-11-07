@@ -1,25 +1,28 @@
 package com.example.multilevel_parking_lot.service.allocation;
 
-import com.example.multilevel_parking_lot.model.Level;
 import com.example.multilevel_parking_lot.model.ParkingLot;
 import com.example.multilevel_parking_lot.model.ParkingSpot;
-import com.example.multilevel_parking_lot.model.Vehicle;
+import com.example.multilevel_parking_lot.model.enums.VehicleType;
+import com.example.multilevel_parking_lot.service.impl.SpotTypeMapper;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Optional;
 
 @Component
 public class NearestSpotAllocationStrategy implements SpotAllocationStrategy {
+
     @Override
-    public Optional<ParkingSpot> allocate(ParkingLot parkingLot, Vehicle vehicle) {
-        // simple strategy: iterate levels in order and pick first available spot that fits
-        return parkingLot.getLevels().stream()
-                .sorted(Comparator.comparingInt(Level::getLevelNumber))
-                .flatMap(level -> level.getSpots().values().stream())
-                .filter(ParkingSpot::isAvailable)
-                .filter(spot -> spot.getSpotType().canFitVehicle(vehicle.getVehicleType()))
-                .sorted(Comparator.comparingInt(ParkingSpot::getNumber))
+    public Optional<ParkingSpot> allocate(ParkingLot lot, VehicleType vehicleType) {
+        String[] allowedTypes = SpotTypeMapper.typesForVehicle(vehicleType);
+
+        // Flatten all levels -> spots and filter available + compatible
+        return lot.getLevels().stream()
+                .sorted(Comparator.comparingInt(level -> level.getLevelNumber()))
+                .flatMap(level -> level.getSpots().stream())
+                .filter(spot -> !spot.isOccupied())
+                .filter(spot -> Arrays.asList(allowedTypes).contains(spot.getSpotType()))
                 .findFirst();
     }
 }

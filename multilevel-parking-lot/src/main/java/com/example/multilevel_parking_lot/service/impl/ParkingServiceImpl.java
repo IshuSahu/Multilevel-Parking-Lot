@@ -7,115 +7,111 @@ import com.example.multilevel_parking_lot.exception.NotFoundException;
 import com.example.multilevel_parking_lot.model.ParkingLot;
 import com.example.multilevel_parking_lot.model.ParkingSpot;
 import com.example.multilevel_parking_lot.model.ParkingTicket;
-import com.example.multilevel_parking_lot.model.Vehicle;
-import com.example.multilevel_parking_lot.model.enums.TicketStatus;
 import com.example.multilevel_parking_lot.repository.ParkingLotRepository;
+import com.example.multilevel_parking_lot.repository.ParkingSpotRepository;
+import com.example.multilevel_parking_lot.repository.ParkingTicketRepository;
 import com.example.multilevel_parking_lot.service.ParkingService;
-import com.example.multilevel_parking_lot.service.allocation.SpotAllocationStrategy;
 import com.example.multilevel_parking_lot.service.fee.FeeStrategy;
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
 public class ParkingServiceImpl implements ParkingService {
 
     private final ParkingLotRepository parkingLotRepository;
-    private final SpotAllocationStrategy allocationStrategy;
+    private final ParkingSpotRepository parkingSpotRepository;
+    private final ParkingTicketRepository parkingTicketRepository;
     private final FeeStrategy feeStrategy;
 
-    // in-memory ticket store; replace with DB table in production
-    private final Map<String, ParkingTicket> ticketStore = new ConcurrentHashMap<>();
-
+    // Park vehicle: transactional and uses atomic DB update to occupy spot
     @Override
+    @Transactional
     public ParkResponse park(ParkRequest request) {
         ParkingLot lot = parkingLotRepository.findById(request.getParkingLotId())
                 .orElseThrow(() -> new NotFoundException("Parking lot not found"));
 
-        Vehicle vehicle = new Vehicle(request.getPlateNumber(), request.getVehicleType());
+        // determine acceptable spot types (string names) from vehicle type
+        String[] types = SpotTypeMapper.typesForVehicle(request.getVehicleType());
 
-        synchronized (lot.getLock()) {
-            var spotOpt = allocationStrategy.allocate(lot, vehicle);
-            if (spotOpt.isEmpty()) {
-                return ParkResponse.builder()
-                        .success(false)
-                        .message("No spot available")
-                        .build();
-            }
-            ParkingSpot spot = spotOpt.get();
-            String ticketId = UUID.randomUUID().toString();
-            ParkingTicket ticket = ParkingTicket.builder()
-                    .ticketId(ticketId)
-                    .parkingLotId(lot.getId())
-                    .spotId(spot.getId())
-                    .vehiclePlate(vehicle.getPlateNumber())
-                    .vehicleType(vehicle.getVehicleType().name())
-                    .entryTime(Instant.now())
-                    .status(TicketStatus.ACTIVE)
-                    .build();
-
-            boolean occupied = spot.occupy(ticketId);
-            if (!occupied) {
-                // someone took it concurrently - try again recursively or return failure
-                return ParkResponse.builder().success(false).message("Race condition - try again").build();
-            }
-
-            ticketStore.put(ticketId, ticket);
-            lot.getTicketIndex().put(ticketId, ticket);
-
-            return ParkResponse.builder()
-                    .success(true)
-                    .ticketId(ticketId)
-                    .spotId(spot.getId())
-                    .entryTime(ticket.getEntryTime())
-                    .message("Parked successfully")
-                    .build();
+        Optional<ParkingSpot> optSpot = parkingSpotRepository.findFirstAvailableByLotAndTypes(lot.getId(), types);
+        if (optSpot.isEmpty()) {
+            return ParkResponse.builder().success(false).message("No spot available").build();
         }
+
+        ParkingSpot spot = optSpot.get();
+        String ticketId = UUID.randomUUID().toString();
+
+        // attempt atomic occupy
+        int updated = parkingSpotRepository.occupyIfFree(spot.getId(), ticketId);
+        if (updated == 0) {
+            // race - someone else took it; fail fast (could retry a few times)
+            return ParkResponse.builder().success(false).message("Race condition: try again").build();
+        }
+
+        // create & persist ticket
+        ParkingTicket ticket = new ParkingTicket();
+        ticket.setTicketId(ticketId);
+        ticket.setParkingLotId(lot.getId());
+        ticket.setSpotId(spot.getId());
+        ticket.setVehiclePlate(request.getPlateNumber());
+        ticket.setVehicleType(request.getVehicleType().name());
+        ticket.setEntryTime(Instant.now());
+        ticket.setStatus("ACTIVE");
+
+        parkingTicketRepository.save(ticket);
+
+        return ParkResponse.builder()
+                .success(true)
+                .ticketId(ticketId)
+                .spotId(spot.getId())
+                .entryTime(ticket.getEntryTime())
+                .message("Parked successfully")
+                .build();
     }
 
+    // Unpark: transactional, free spot atomically and compute fee
     @Override
+    @Transactional
     public UnparkResponse unpark(String ticketId) {
-        ParkingTicket ticket = ticketStore.get(ticketId);
-        if (ticket == null) throw new NotFoundException("Ticket not found");
+        ParkingTicket ticket = parkingTicketRepository.findById(ticketId)
+                .orElseThrow(() -> new NotFoundException("Ticket not found"));
 
-        if (ticket.getStatus() == TicketStatus.CLOSED) {
+        if ("CLOSED".equalsIgnoreCase(ticket.getStatus())) {
             return UnparkResponse.builder().success(false).message("Already closed").build();
         }
-        ParkingLot lot = parkingLotRepository.findById(ticket.getParkingLotId())
-                .orElseThrow(() -> new NotFoundException("Parking lot not found"));
 
-        synchronized (lot.getLock()) {
-            ParkingSpot spot = lot.getSpotIndex().get(ticket.getSpotId());
-            if (spot == null) throw new NotFoundException("Spot not found");
-            // compute duration and fee
-            Instant exit = Instant.now();
-            Duration duration = Duration.between(ticket.getEntryTime(), exit);
-            BigDecimal cost = feeStrategy.calculate(ticket, duration);
+        // compute duration and fee
+        Instant exit = Instant.now();
+        Duration duration = Duration.between(ticket.getEntryTime(), exit);
 
-            // free spot
-            spot.free();
+        BigDecimal cost = feeStrategy.calculate(ticket, duration); // fee strategy uses ticket.getVehicleType()
 
-            ticket.setExitTime(exit);
-            ticket.setCost(cost);
-            ticket.setStatus(TicketStatus.CLOSED);
-            ticketStore.put(ticketId, ticket);
-
-            lot.getTicketIndex().remove(ticketId);
-
-            return UnparkResponse.builder()
-                    .success(true)
-                    .ticketId(ticketId)
-                    .cost(cost)
-                    .durationMinutes(duration.toMinutes())
-                    .message("Unparked successfully")
-                    .build();
+        // free spot atomically: ensure only the owner ticket can free
+        int freed = parkingSpotRepository.freeIfOwned(ticket.getSpotId(), ticketId);
+        if (freed == 0) {
+            // either already freed or mismatch - log and return error
+            throw new IllegalStateException("Unable to free spot - ownership mismatch or already freed");
         }
+
+        ticket.setExitTime(exit);
+        ticket.setCost(cost);
+        ticket.setStatus("CLOSED");
+        parkingTicketRepository.save(ticket);
+
+        return UnparkResponse.builder()
+                .success(true)
+                .ticketId(ticketId)
+                .cost(cost)
+                .durationMinutes(duration.toMinutes())
+                .message("Unparked successfully")
+                .build();
     }
 }

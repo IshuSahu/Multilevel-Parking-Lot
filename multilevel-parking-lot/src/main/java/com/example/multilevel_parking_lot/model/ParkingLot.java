@@ -1,30 +1,23 @@
 package com.example.multilevel_parking_lot.model;
-
-import lombok.Data;
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
-@Data
+@Entity
+@Table(name = "parking_lot")
+@Getter
+@Setter
+@NoArgsConstructor
 public class ParkingLot {
-    private String id;
+    @Id
+    private String id; // allow human ids like "lot-1"
+
     private String name;
+
+    @OneToMany(mappedBy = "parkingLot", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<Level> levels = new ArrayList<>();
-    private Map<String, ParkingSpot> spotIndex = new ConcurrentHashMap<>();
-    private Map<String, ParkingTicket> ticketIndex = new ConcurrentHashMap<>();
-    private final Object lock = new Object();
-
-    public void indexSpots() {
-        spotIndex.clear();
-        for (Level l : levels) {
-            l.getSpots().values().forEach(s -> spotIndex.put(s.getId(), s));
-        }
-    }
-
-    // convenience
-    public List<Level> getLevels() {
-        return levels;
-    }
 }

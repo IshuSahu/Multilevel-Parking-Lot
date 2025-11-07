@@ -1,41 +1,31 @@
 package com.example.multilevel_parking_lot.model;
 
-import com.example.multilevel_parking_lot.model.enums.SpotType;
-import lombok.Builder;
-import lombok.Data;
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-@Data
-@Builder
+@Entity
+@Table(name = "parking_spot")
+@Getter @Setter @NoArgsConstructor
 public class ParkingSpot {
-    private String id; // unique id like L1-S01
-    private SpotType spotType;
-    private int level;
+    @Id
+    private String id; // e.g. "L1-S1"
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "level_id")
+    private Level level;
+
     private int number;
 
-    // track occupancy in thread-safe manner, ensure non-null when using builder
-    @Builder.Default
-    private AtomicBoolean occupied = new AtomicBoolean(false);
+    @Column(name = "spot_type")
+    private String spotType; // store enum name
 
+    private boolean occupied;
+
+    @Column(name = "current_ticket_id")
     private String currentTicketId;
 
-    public boolean occupy(String ticketId) {
-        if (occupied.compareAndSet(false, true)) {
-            this.currentTicketId = ticketId;
-            return true;
-        }
-        return false;
-    }
-
-    public boolean free() {
-        if (occupied.compareAndSet(true, false)) {
-            this.currentTicketId = null;
-            return true;
-        }
-        return false;
-    }
-
-    public boolean isAvailable() {
-        return !occupied.get();
-    }
+    @Version
+    private Long version; // optimistic locking
 }

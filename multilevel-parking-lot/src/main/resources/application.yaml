@@ -4,7 +4,22 @@ server:
 spring:
   application:
     name: multilevel-parking-lot
+  datasource:
+    url: jdbc:postgresql://localhost:5432/parkingdb
+    username: postgres
+    password: 1234
+    driver-class-name: org.postgresql.Driver
 
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
 management:
   endpoints:
     web:

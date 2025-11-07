@@ -1,28 +1,33 @@
 package com.example.multilevel_parking_lot.service.fee;
 
 import com.example.multilevel_parking_lot.model.ParkingTicket;
+import com.example.multilevel_parking_lot.model.RateCard;
+import com.example.multilevel_parking_lot.service.RateCardService;
+import com.example.multilevel_parking_lot.tenant.TenantContext;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 
 @Component
+@RequiredArgsConstructor
 public class TimeBasedFeeStrategy implements FeeStrategy {
-    // example rates - override from config in real app
-    private static final BigDecimal RATE_PER_HOUR_CAR = BigDecimal.valueOf(30);
-    private static final BigDecimal RATE_PER_HOUR_MOTORCYCLE = BigDecimal.valueOf(10);
-    private static final BigDecimal RATE_PER_HOUR_TRUCK = BigDecimal.valueOf(50);
-    private static final BigDecimal RATE_PER_HOUR_EV = BigDecimal.valueOf(35);
+
+    private final RateCardService rateCardService;
 
     @Override
     public BigDecimal calculate(ParkingTicket ticket, Duration duration) {
-        long hours = Math.max(1, (int) Math.ceil((double)duration.toMinutes() / 60.0));
-        switch (ticket.getVehicleType()) {
-            case "CAR": return RATE_PER_HOUR_CAR.multiply(BigDecimal.valueOf(hours));
-            case "MOTORCYCLE": return RATE_PER_HOUR_MOTORCYCLE.multiply(BigDecimal.valueOf(hours));
-            case "TRUCK": return RATE_PER_HOUR_TRUCK.multiply(BigDecimal.valueOf(hours));
-            case "EV": return RATE_PER_HOUR_EV.multiply(BigDecimal.valueOf(hours));
-            default: return RATE_PER_HOUR_CAR.multiply(BigDecimal.valueOf(hours));
-        }
+        String spotType = ticket.getVehicleType(); // or derive spot type via ticket->spot lookup (improve later)
+        String tenantId = TenantContext.getTenantId();
+        if (tenantId == null || tenantId.isBlank()) tenantId = "default";
+
+        BigDecimal ratePerHour = rateCardService
+                .findRate(tenantId, spotType)
+                .map(RateCard::getRatePerHour)
+                .orElse(BigDecimal.valueOf(20.0)); // fallback
+
+        long hours = Math.max(1, duration.toHours());
+        return ratePerHour.multiply(BigDecimal.valueOf(hours));
     }
 }
